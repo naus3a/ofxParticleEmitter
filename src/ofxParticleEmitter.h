@@ -26,6 +26,9 @@
 
 #include "ofMain.h"
 #include "ofxXmlSettings.h"
+#include "base64.h"
+
+#define RENDER_FAST
 
 // ------------------------------------------------------------------------
 // Structures
@@ -169,7 +172,18 @@ public:
 	~ofxParticleEmitter();
 	
 	bool	loadFromXml( const std::string& filename );
-	void	update();
+	void    savePositionToFile(string loadFile, string saveFile);
+    
+    //emitter controls
+    void start();
+    void stop();
+    bool isRunning();
+    bool isReady();
+    void setLoopType(ofLoopType _loop);
+    void setPosition(ofVec2f np);
+    ofVec2f getPosition();
+    
+    void	update();
 	void	draw( int x = 0, int y = 0 );
 	void	exit();
     string  getTextureName();
@@ -203,7 +217,7 @@ public:
 	
 protected:
 	
-	void	parseParticleConfig();
+	void	parseParticleConfig(string _pth="");
 	void	setupArrays();
 	
 	void	stopParticleEmitter();
@@ -211,8 +225,21 @@ protected:
 	void	initParticle( Particle* particle );
 	
 	void	drawTextures();
+    
+    void checkRunningState(float & aDelta);
+    void emitParticles(int n);
+    void emitParticlesFromDelta(float & aDelta);
+    string getImagePathFromName(string imgName, string pexPth="");
+    bool hasEmbeddedSprite();
+    bool isOverwritingFile(string src, string dst);
+#ifdef RENDER_FAST
+    string makeVertShdSource();
+    string makeFragShdSource();
+    void    drawVBO();
+#else
 	void	drawPoints();
-	void	drawPointsOES();
+#endif
+	//void	drawPointsOES();
 	
 	ofxXmlSettings*	settings;
 
@@ -221,7 +248,9 @@ protected:
     string          textureName;
 	
 	GLfloat			emissionRate;
-	GLfloat			emitCounter;	
+	GLfloat			emitCounter;
+	GLfloat         startTime;
+    GLfloat         endTime;
 	GLfloat			elapsedTime;
 	int				lastUpdateMillis;
 
@@ -230,7 +259,17 @@ protected:
 
 	GLuint			verticesID;		// Holds the buffer name of the VBO that stores the color and vertices info for the particles
 	Particle*		particles;		// Array of particles that hold the particle emitters particle details
+#ifdef RENDER_FAST
+    ofShader shd;
+    ofVbo vbo;
+    ofVec3f * vtx;
+    ofVec3f * nlx;
+    ofFloatColor * clx;
+#else
 	PointSprite*	vertices;		// Array of vertices and color information for each particle to be rendered
+#endif
+    ofLoopType loopType;
+    bool bInited;
 };
 
 #endif

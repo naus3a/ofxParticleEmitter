@@ -66,8 +66,53 @@ ofxParticleEmitter::ofxParticleEmitter()
 
 	verticesID = 0;
 	particles = NULL;
+#ifdef RENDER_FAST
+    vtx = NULL;
+    nlx = NULL;
+    clx = NULL;
+    
+    //vbo.setUsage(GL_DYNAMIC_DRAW);
+    //vbo.setMode(OF_PRIMITIVE_POINTS);
+    vbo.enableNormals();
+    vbo.enableColors();
+    
+    shd.setupShaderFromSource(GL_VERTEX_SHADER, makeVertShdSource());
+    shd.setupShaderFromSource(GL_FRAGMENT_SHADER, makeFragShdSource());
+    shd.linkProgram();
+#else
 	vertices = NULL;
+#endif
+    
+    setLoopType(OF_LOOP_NORMAL);
+    bInited = false;
 }
+
+#ifdef RENDER_FAST
+string ofxParticleEmitter::makeVertShdSource(){
+    stringstream src;
+    src << "void main() {\n";
+        
+    src << "    gl_Position   = gl_ModelViewProjectionMatrix * gl_Vertex;\n";
+    src << "    float size    = gl_Normal.x;\n";
+    src << "    gl_PointSize  = size;\n";
+    src << "    gl_FrontColor = gl_Color;\n";
+    src << "}\n";
+    return src.str();
+}
+
+string ofxParticleEmitter::makeFragShdSource(){
+    stringstream src;
+    
+    src << "uniform sampler2D tex;\n";
+    
+    src << "void main (void) {\n";
+        
+    src << "    gl_FragColor = texture2D(tex, gl_TexCoord[0].st) * gl_Color;\n";
+        
+    src << "}\n";
+    return src.str();
+}
+#endif
 
 ofxParticleEmitter::~ofxParticleEmitter()
 {
@@ -83,12 +128,76 @@ void ofxParticleEmitter::exit()
 	if ( particles != NULL )
 		delete particles;
 	particles = NULL;
-	
+
+#ifdef RENDER_FAST
+    if(vtx!=NULL){
+        delete vtx;
+        vtx = NULL;
+    }
+    if(nlx!=NULL){
+        delete nlx;
+        nlx = NULL;
+    }
+    if(clx!=NULL){
+        delete clx;
+        clx = NULL;
+    }
+#else
 	if ( vertices != NULL )
 		delete vertices;
 	vertices = NULL;
-	
+#endif
 	glDeleteBuffers( 1, &verticesID );
+    
+    bInited = false;
+}
+
+bool ofxParticleEmitter::hasEmbeddedSprite(){
+    return false;//(settings->getAttribute( "texture", "data", "" )!="");
+}
+
+string ofxParticleEmitter::getImagePathFromName(string imgName, string pexPth){
+    string imgPth = "";
+    if(pexPth.size()>0)imgPth += pexPth;
+    imgPth += imgName;
+    return imgPth;
+}
+
+bool ofxParticleEmitter::isOverwritingFile(string src, string dst){
+    return (src==dst);
+}
+
+void ofxParticleEmitter::savePositionToFile(string loadFile, string saveFile){
+    settings = new ofxXmlSettings();
+    if(settings->load(loadFile)){
+        settings->pushTag( "particleEmitterConfig" );
+        /*if(settings->attributeExists("sourcePosition", "x")){
+            settings->removeAttribute("sourcePosition", "x");
+        }
+        if(settings->attributeExists("sourcePosition", "y")){
+            settings->removeAttribute("sourcePosition", "y");
+        }*/
+        settings->setAttribute("sourcePosition", "x", sourcePosition.x, 0);
+        settings->setAttribute("sourcePosition", "y", sourcePosition.y, 0);
+        
+        if(!isOverwritingFile(loadFile, saveFile)){
+            if(!hasEmbeddedSprite()){
+                string imgName = settings->getAttribute( "texture", "name", "" );
+                string oldImgPth = getImagePathFromName(imgName, ofFilePath::getEnclosingDirectory(loadFile));
+                imgName = ofFilePath::getBaseName(saveFile) + ".png";
+                string newImgPth = ofFilePath::getEnclosingDirectory(saveFile) + imgName;
+                settings->setAttribute("texture", "name", imgName, 0);
+                ofFile::copyFromTo(oldImgPth, newImgPth);
+                cout<<oldImgPth.c_str()<<" "<<newImgPth.c_str()<<endl;
+            }
+        }
+        settings->popTag();
+        
+        settings->save(saveFile);
+        
+    }
+    delete settings;
+    settings = NULL;
 }
 
 bool ofxParticleEmitter::loadFromXml( const std::string& filename )
@@ -103,19 +212,24 @@ bool ofxParticleEmitter::loadFromXml( const std::string& filename )
 	ok = settings->loadFile( filename );
 	if ( ok )
 	{
-		parseParticleConfig();
+        
+        parseParticleConfig(ofFilePath::getEnclosingDirectory(filename,false));
 		setupArrays();
 		
-		ok = active = true;
+		//ok = active = true;
+        start();
+        ok = active;
+        bInited = ok;
+        emissionRate =  maxParticles/particleLifespan;
 	}
 
 	delete settings;
 	settings = NULL;
-	
+    
 	return ok;
 }
 
-void ofxParticleEmitter::parseParticleConfig()
+void ofxParticleEmitter::parseParticleConfig(string _pth)
 {
 	if ( settings == NULL )
 	{
@@ -123,29 +237,78 @@ void ofxParticleEmitter::parseParticleConfig()
 		return;
 	}
 	
-	settings->pushTag( "particleEmitterConfig" );
+    settings->pushTag( "particleEmitterConfig" );
 
 	std::string imageFilename	= settings->getAttribute( "texture", "name", "" );
 	std::string imageData		= settings->getAttribute( "texture", "data", "" );
+    
+    /*if(imageData!=""){
+        ofLog( OF_LOG_WARNING, "ofxParticleEmitter::parseParticleConfig() - loading image data" );
+        string sBin = base64_decode(imageData);
+        ofBuffer buf;
+        buf.set(sBin.c_str(), sBin.size());
+        ofBufferToFile("cippa.png", buf);
+        
+        ofDisableArbTex();
+        texture =  new ofImage();
+        texture->loadImage(buf);
+        texture->setUseTexture(true);
+        texture->setAnchorPercent( 0.5f, 0.5f );
+        textureName = imageFilename;
+        textureData = texture->getTextureReference().getTextureData();
+        ofEnableArbTex();
+    }else if(imageFilename!=""){
+        ofLog( OF_LOG_WARNING, "ofxParticleEmitter::parseParticleConfig() - loading image file" );
+        string imgPth;
+        if(_pth.size()>0)imgPth += _pth;
+        imgPth += imageFilename;
+        ofDisableArbTex();
+        texture = new ofImage();
+        ofFile ff;
+        ff.open(imgPth);
+        ff.getFileBuffer();
+        if(texture->loadImage(imgPth)){
+            texture->setUseTexture(true);
+            texture->setAnchorPercent( 0.5f, 0.5f );
+            textureName = imageFilename;
+            textureData = texture->getTextureReference().getTextureData();
+        }else{
+            ofEnableArbTex();
+            ofLog(OF_LOG_ERROR, "ofxParticleEmitter::parseParticleConfig() - No Image file");
+            return;
+        }
+        ofEnableArbTex();
+    }else{
+        ofLog(OF_LOG_ERROR, "ofxParticleEmitter::parseParticleConfig() - No Image name and no image data");
+        return;
+    }*/
+    
 	
 	if ( imageFilename != "" )
 	{
 		ofLog( OF_LOG_WARNING, "ofxParticleEmitter::parseParticleConfig() - loading image file" );
 		
+        //string imgPth;
+        //if(_pth.size()>0)imgPth += _pth;
+        //imgPth += imageFilename;
+        
+        string imgPth = getImagePathFromName(imageFilename, _pth);
+        ofDisableArbTex();
 		texture = new ofImage();
-		texture->loadImage( imageFilename );
+		texture->loadImage( imgPth );
 		texture->setUseTexture( true );
 		texture->setAnchorPercent( 0.5f, 0.5f );
         
         textureName = imageFilename;
 		
 		textureData = texture->getTextureReference().getTextureData();
+        ofEnableArbTex();
 	}
 	else if ( imageData != "" )
 	{
 		// TODO
-		
 		ofLog( OF_LOG_ERROR, "ofxParticleEmitter::parseParticleConfig() - image data found but not yet implemented!" );
+        
 		return;
 	}
 
@@ -215,6 +378,13 @@ void ofxParticleEmitter::setupArrays()
 {
 	// Allocate the memory necessary for the particle emitter arrays
 	particles = (Particle*)malloc( sizeof( Particle ) * maxParticles );
+#ifdef RENDER_FAST
+    vtx = (ofVec3f*)malloc(sizeof(ofVec3f) * maxParticles);
+    nlx = (ofVec3f*)malloc(sizeof(ofVec3f) * maxParticles);
+    clx = (ofFloatColor *)malloc(sizeof(ofFloatColor) * maxParticles);
+    assert(particles && vtx && clx && nlx);
+    
+#else
 	vertices = (PointSprite*)malloc( sizeof( PointSprite ) * maxParticles );
 	
 	// If one of the arrays cannot be allocated throw an assertion as this is bad
@@ -222,7 +392,7 @@ void ofxParticleEmitter::setupArrays()
 	
 	// Generate the vertices VBO
 	glGenBuffers( 1, &verticesID );
-	
+#endif
 	// Set the particle count to zero
 	particleCount = 0;
 	
@@ -325,25 +495,72 @@ void ofxParticleEmitter::stopParticleEmitter()
 {
 	active = false;
 	elapsedTime = 0;
-	emitCounter = 0;
+	//emitCounter = 0;
 }
 
 // ------------------------------------------------------------------------
 // Update
 // ------------------------------------------------------------------------
 
+
+void ofxParticleEmitter::checkRunningState(float & aDelta){
+    if(active){
+        if(duration==-1){
+            //emitParticles(10);
+            emitParticlesFromDelta(aDelta);
+        }else{
+            if(ofGetElapsedTimef()<endTime){
+                //emitParticles(10);
+                emitParticlesFromDelta(aDelta);
+            }else{
+                stopParticleEmitter();
+            }
+        }
+    }else{
+        if(loopType==OF_LOOP_NORMAL){
+            if(particleCount==0){
+                start();
+            }
+        }
+    }
+}
+
+void ofxParticleEmitter::emitParticles(int n){
+    for(int i=0;i<n;i++){
+        addParticle();
+    }
+}
+
+void ofxParticleEmitter::emitParticlesFromDelta(float &aDelta){
+    if(emissionRate){
+        float rate = 1/emissionRate;
+        emitCounter += aDelta;
+        int cc =0;
+        while (particleCount < maxParticles && emitCounter > rate) {
+            addParticle();
+            emitCounter -= rate;
+            cc++;
+        }
+    }
+}
+
 void ofxParticleEmitter::update()
 {
-	if ( !active ) return;
+	if(!bInited)return;
+    //if ( !active ) return;
 
 	// Calculate the emission rate
-	emissionRate = maxParticles / particleLifespan;
+	//emissionRate = maxParticles / particleLifespan;
 
 	GLfloat aDelta = (ofGetElapsedTimeMillis()-lastUpdateMillis)/1000.0f;
+    //GLfloat aDelta = ofGetElapsedTimef()-lastUpdateMillis;
 	
+    checkRunningState(aDelta);
+    
 	// If the emitter is active and the emission rate is greater than zero then emit
 	// particles
-	if(active && emissionRate) {
+    
+    /*if(active && emissionRate) {
 		float rate = 1.0f/emissionRate;
 		emitCounter += aDelta;
 		while(particleCount < maxParticles && emitCounter > rate) {
@@ -354,7 +571,7 @@ void ofxParticleEmitter::update()
 		elapsedTime += aDelta;
 		if(duration != -1 && duration < elapsedTime)
 			stopParticleEmitter();
-	}
+	}*/
 	
 	// Reset the particle index before updating the particles in this emitter
 	particleIndex = 0;
@@ -422,7 +639,12 @@ void ofxParticleEmitter::update()
 			currentParticle->color.green += currentParticle->deltaColor.green;
 			currentParticle->color.blue += currentParticle->deltaColor.blue;
 			currentParticle->color.alpha += currentParticle->deltaColor.alpha;
-			
+#ifdef RENDER_FAST
+            vtx[particleIndex].set(currentParticle->position.x, currentParticle->position.y, 0);
+            clx[particleIndex].set(currentParticle->color.red, currentParticle->color.green, currentParticle->color.blue, currentParticle->color.alpha);
+            currentParticle->particleSize += currentParticle->particleSizeDelta;
+            nlx[particleIndex].x = MAX(0, currentParticle->particleSize);
+#else
 			// Place the position of the current particle into the vertices array
 			vertices[particleIndex].x = currentParticle->position.x;
 			vertices[particleIndex].y = currentParticle->position.y;
@@ -433,7 +655,7 @@ void ofxParticleEmitter::update()
 			
 			// Place the color of the current particle into the color array
 			vertices[particleIndex].color = currentParticle->color;
-			
+#endif
 			// Update the particle counter
 			particleIndex++;
 		} else {
@@ -449,6 +671,7 @@ void ofxParticleEmitter::update()
 	}
 
 	lastUpdateMillis = ofGetElapsedTimeMillis();
+    //lastUpdateMillis = ofGetElapsedTimef();
 }
 
 // ------------------------------------------------------------------------
@@ -457,21 +680,24 @@ void ofxParticleEmitter::update()
 
 void ofxParticleEmitter::draw(int x /* = 0 */, int y /* = 0 */)
 {
-	if ( !active ) return;
+	if (!bInited || (!active && particleCount==0)) return;
 	
 	glPushMatrix();
 	glTranslatef( x, y, 0.0f );
 	
-#ifdef TARGET_OF_IPHONE
+//#ifdef TARGET_OF_IPHONE
 	
-	drawPointsOES();
+//	drawPointsOES();
 	
+//#else
+#ifdef RENDER_FAST
+    drawVBO();
 #else
-	
 	drawTextures();
+#endif
 	//drawPoints();
 	
-#endif
+//#endif
 	
 	glPopMatrix();
 }
@@ -483,17 +709,45 @@ void ofxParticleEmitter::drawTextures()
 	
 	for( int i = 0; i < particleCount; i++ )
 	{
-		PointSprite* ps = &vertices[i];
+#ifdef RENDER_FAST
+        ofSetColor(clx[i]);
+        texture->draw(vtx[i].x, vtx[i].y, nlx[i].x, nlx[i].x);
+#else
+        PointSprite* ps = &vertices[i];
 		ofSetColor( ps->color.red*255.0f, ps->color.green*255.0f, 
 				   ps->color.blue*255.0f, ps->color.alpha*255.0f );
         //ofEnableAlphaBlending();
 		texture->draw( ps->x, ps->y, ps->size, ps->size );
         //ofDisableAlphaBlending();
+#endif
 	}
 	
 	glDisable(GL_BLEND);
 }
 
+#ifdef RENDER_FAST
+void ofxParticleEmitter::drawVBO(){
+    vbo.setVertexData(vtx, particleCount, GL_DYNAMIC_DRAW);
+    vbo.setColorData(clx, particleCount, GL_DYNAMIC_DRAW);
+    vbo.setNormalData(nlx, particleCount, GL_DYNAMIC_DRAW);
+    
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, blendFuncDestination);//(blendFuncSource, blendFuncDestination);
+    //ofEnableBlendMode(OF_BLENDMODE_ADD);
+    ofEnablePointSprites();
+    shd.begin();
+    texture->bind();
+    vbo.draw(GL_POINTS, 0, particleCount);
+    texture->unbind();
+    shd.end();
+    ofDisablePointSprites();
+    //ofDisableBlendMode();
+    glDisable(GL_BLEND);
+    
+    //ofSetColor(ofColor::red);
+    //texture->draw(100, 100, 100, 100);
+}
+#else
 // this doesn't yet work, it is an attempt to port over the point sprite logic
 // from opengles. It draws the point sprites but it doesn't replace the point
 // size or color values. I left it here in case anyone wants to fix it :)
@@ -559,7 +813,8 @@ void ofxParticleEmitter::drawPoints()
 	// its on
 	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
 }
-
+#endif
+/*
 void ofxParticleEmitter::drawPointsOES()
 {
 #ifdef TARGET_OF_IPHONE
@@ -616,6 +871,7 @@ void ofxParticleEmitter::drawPointsOES()
 	
 #endif
 }
+ */
 
 void ofxParticleEmitter::changeTexture(string filename) {
     
@@ -626,4 +882,45 @@ void ofxParticleEmitter::changeTexture(string filename) {
 string ofxParticleEmitter::getTextureName() {
     
     return textureName;
+}
+
+//emitter controls
+void ofxParticleEmitter::setPosition(ofVec2f np){
+    sourcePosition.x = np.x;
+    sourcePosition.y = np.y;
+}
+
+ofVec2f ofxParticleEmitter::getPosition(){
+    return ofVec2f(sourcePosition.x, sourcePosition.y);
+}
+
+bool ofxParticleEmitter::isRunning(){
+    return active;
+}
+
+bool ofxParticleEmitter::isReady(){
+    return bInited;
+}
+
+void ofxParticleEmitter::stop(){
+    if(isRunning()){
+        stopParticleEmitter();
+    }
+}
+
+void ofxParticleEmitter::start(){
+    if(!isRunning()){
+        startTime = ofGetElapsedTimef();
+        endTime = startTime + duration;
+        active = true;
+   }
+}
+
+void ofxParticleEmitter::setLoopType(ofLoopType _loop){
+    if(_loop==OF_LOOP_PALINDROME){
+        ofLogError("ofxParticleEmitter", "You cannot set a palindrome loop.");
+        return;
+    }else{
+        loopType = _loop;
+    }
 }
