@@ -81,6 +81,8 @@ typedef struct
 	GLfloat		particleSize;
 	GLfloat		particleSizeDelta;
 	GLfloat		timeToLive;
+    
+    GLfloat     sIdx;
 } Particle;
 
 // ------------------------------------------------------------------------
@@ -182,12 +184,17 @@ public:
     void setLoopType(ofLoopType _loop);
     void setPosition(ofVec2f np);
     ofVec2f getPosition();
+    bool hasParticlesLeft();
     
     void	update();
 	void	draw( int x = 0, int y = 0 );
 	void	exit();
     string  getTextureName();
     void    changeTexture(string filename);
+    
+    void flipY(bool b);
+    void flipSprite(bool bX, bool bY);
+    void applySpriteFlipping();
 
 	int				emitterType;
 	Vector2f		sourcePosition, sourcePositionVariance;			
@@ -233,8 +240,8 @@ protected:
     bool hasEmbeddedSprite();
     bool isOverwritingFile(string src, string dst);
 #ifdef RENDER_FAST
-    string makeVertShdSource();
-    string makeFragShdSource();
+    string makeVertShdSource(bool bMulti);
+    string makeFragShdSource(bool bMulti);
     void    drawVBO();
 #else
 	void	drawPoints();
@@ -268,6 +275,19 @@ protected:
 #else
 	PointSprite*	vertices;		// Array of vertices and color information for each particle to be rendered
 #endif
+    
+    //multisprites
+    bool bMultiSprite;
+    int nSprites;
+    ofVec2f szSprite;
+    //----
+    
+    //flipping
+    float yFlipper;
+    bool flipSpriteX;
+    bool flipSpriteY;
+    //---
+    
     ofLoopType loopType;
     bool bInited;
 };

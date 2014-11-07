@@ -29,7 +29,11 @@
 
 ofxParticleEmitter::ofxParticleEmitter()
 {
-	settings = NULL;
+	bMultiSprite = false;
+    nSprites = 0;
+    szSprite.set(10,10);
+    
+    settings = NULL;
 	
 	emitterType = kParticleTypeGravity;
 	texture = NULL;
@@ -76,40 +80,75 @@ ofxParticleEmitter::ofxParticleEmitter()
     vbo.enableNormals();
     vbo.enableColors();
     
-    shd.setupShaderFromSource(GL_VERTEX_SHADER, makeVertShdSource());
-    shd.setupShaderFromSource(GL_FRAGMENT_SHADER, makeFragShdSource());
-    shd.linkProgram();
+    //shd.setupShaderFromSource(GL_VERTEX_SHADER, makeVertShdSource());
+    //shd.setupShaderFromSource(GL_FRAGMENT_SHADER, makeFragShdSource());
+    //shd.linkProgram();
 #else
 	vertices = NULL;
 #endif
     
     setLoopType(OF_LOOP_NORMAL);
     bInited = false;
+    
+    //flipping
+    yFlipper = 1;
+    flipSpriteX = false;
+    flipSpriteY = false;
+    //---
 }
 
 #ifdef RENDER_FAST
-string ofxParticleEmitter::makeVertShdSource(){
+string ofxParticleEmitter::makeVertShdSource(bool bMulti){
     stringstream src;
-    src << "void main() {\n";
+    if(bMulti){
+        src << "varying float sIdx; \n";
+        src << "varying float sTot; \n";
+        src << "void main() {\n";
+        src << "    gl_Position   = gl_ModelViewProjectionMatrix * gl_Vertex;\n";
+        src << "    float size    = gl_Normal.x;\n";
+        src << "    sIdx          = gl_Normal.y;\n";
+        src << "    sTot          = gl_Normal.z;\n";
+        src << "    gl_PointSize  = size;\n";
+        src << "    gl_FrontColor = gl_Color;\n";
+        src << "}\n";
+    }else{
+        src << "void main() {\n";
         
-    src << "    gl_Position   = gl_ModelViewProjectionMatrix * gl_Vertex;\n";
-    src << "    float size    = gl_Normal.x;\n";
-    src << "    gl_PointSize  = size;\n";
-    src << "    gl_FrontColor = gl_Color;\n";
-    src << "}\n";
+        src << "    gl_Position   = gl_ModelViewProjectionMatrix * gl_Vertex;\n";
+        src << "    float size    = gl_Normal.x;\n";
+        src << "    gl_PointSize  = size;\n";
+        src << "    gl_FrontColor = gl_Color;\n";
+        src << "}\n";
+    }
     return src.str();
 }
 
-string ofxParticleEmitter::makeFragShdSource(){
+string ofxParticleEmitter::makeFragShdSource(bool bMulti){
     stringstream src;
-    
-    src << "uniform sampler2D tex;\n";
-    
-    src << "void main (void) {\n";
+    if(bMulti){
+        src << "varying float sIdx; \n";
+        src << "varying float sTot; \n";
+        src << "uniform sampler2D tex;\n";
         
-    src << "    gl_FragColor = texture2D(tex, gl_TexCoord[0].st) * gl_Color;\n";
+        src << "void main (void) {\n";
         
-    src << "}\n";
+        src << "    vec2 tc = gl_TexCoord[0].st; \n";
+        src << "    float sw = 1.0/sTot; \n";
+        src << "    float xx = (sIdx * sw) + (tc.x * sw); \n";
+        src << "    tc.x = xx; \n";
+        
+        src << "    gl_FragColor = texture2D(tex, tc) * gl_Color;\n";
+        
+        src << "}\n";
+    }else{
+        src << "uniform sampler2D tex;\n";
+    
+        src << "void main (void) {\n";
+        
+        src << "    gl_FragColor = texture2D(tex, gl_TexCoord[0].st) * gl_Color;\n";
+        
+        src << "}\n";
+    }
     return src.str();
 }
 #endif
@@ -221,6 +260,12 @@ bool ofxParticleEmitter::loadFromXml( const std::string& filename )
         ok = active;
         bInited = ok;
         emissionRate =  maxParticles/particleLifespan;
+
+#ifdef RENDER_FAST
+        shd.setupShaderFromSource(GL_VERTEX_SHADER, makeVertShdSource(bMultiSprite));
+        shd.setupShaderFromSource(GL_FRAGMENT_SHADER, makeFragShdSource(bMultiSprite));
+        shd.linkProgram();
+#endif
 	}
 
 	delete settings;
@@ -238,6 +283,16 @@ void ofxParticleEmitter::parseParticleConfig(string _pth)
 	}
 	
     settings->pushTag( "particleEmitterConfig" );
+    
+    bMultiSprite = false;
+    if(settings->tagExists("multi_sprite")){
+        settings->pushTag("multi_sprite");
+        nSprites = settings->getValue("n", 0);
+        if(nSprites>0){
+            bMultiSprite = true;
+        }
+        settings->popTag();
+    }
 
 	std::string imageFilename	= settings->getAttribute( "texture", "name", "" );
 	std::string imageData		= settings->getAttribute( "texture", "data", "" );
@@ -296,6 +351,7 @@ void ofxParticleEmitter::parseParticleConfig(string _pth)
         ofDisableArbTex();
 		texture = new ofImage();
 		texture->loadImage( imgPth );
+        applySpriteFlipping();
 		texture->setUseTexture( true );
 		texture->setAnchorPercent( 0.5f, 0.5f );
         
@@ -329,7 +385,7 @@ void ofxParticleEmitter::parseParticleConfig(string _pth)
 	angleVariance				= settings->getAttribute( "angleVariance", "value", angleVariance );
 	
 	gravity.x					= settings->getAttribute( "gravity", "x", gravity.x );
-	gravity.y					= settings->getAttribute( "gravity", "y", gravity.y );
+	gravity.y					= settings->getAttribute( "gravity", "y", gravity.y * yFlipper);
 	
 	radialAcceleration			= settings->getAttribute( "radialAcceleration", "value", radialAcceleration );
 	tangentialAcceleration		= settings->getAttribute( "tangentialAcceleration", "value", tangentialAcceleration );
@@ -403,6 +459,10 @@ void ofxParticleEmitter::setupArrays()
 // ------------------------------------------------------------------------
 // Particle Management
 // ------------------------------------------------------------------------
+
+bool ofxParticleEmitter::hasParticlesLeft(){
+    return (particleCount>0);
+}
 
 bool ofxParticleEmitter::addParticle()
 {
@@ -489,6 +549,12 @@ void ofxParticleEmitter::initParticle( Particle* particle )
 	particle->deltaColor.green = ((end.green - start.green) / particle->timeToLive)  * (1.0 / MAXIMUM_UPDATE_RATE);
 	particle->deltaColor.blue = ((end.blue - start.blue) / particle->timeToLive)  * (1.0 / MAXIMUM_UPDATE_RATE);
 	particle->deltaColor.alpha = ((end.alpha - start.alpha) / particle->timeToLive)  * (1.0 / MAXIMUM_UPDATE_RATE);
+    
+    //multisprite
+    if(bMultiSprite){
+        particle->sIdx = (int)ofRandom(0, nSprites-1);
+    }
+    //---
 }
 
 void ofxParticleEmitter::stopParticleEmitter()
@@ -644,6 +710,8 @@ void ofxParticleEmitter::update()
             clx[particleIndex].set(currentParticle->color.red, currentParticle->color.green, currentParticle->color.blue, currentParticle->color.alpha);
             currentParticle->particleSize += currentParticle->particleSizeDelta;
             nlx[particleIndex].x = MAX(0, currentParticle->particleSize);
+            nlx[particleIndex].y = currentParticle->sIdx;
+            nlx[particleIndex].z = nSprites;
 #else
 			// Place the position of the current particle into the vertices array
 			vertices[particleIndex].x = currentParticle->position.x;
@@ -924,3 +992,20 @@ void ofxParticleEmitter::setLoopType(ofLoopType _loop){
         loopType = _loop;
     }
 }
+
+//flipping (to be called first)
+void ofxParticleEmitter::flipY(bool b){
+    yFlipper = b?-1:1;
+}
+
+void ofxParticleEmitter::flipSprite(bool bX, bool bY){
+    flipSpriteX=bX;
+    flipSpriteY=bY;
+}
+
+void ofxParticleEmitter::applySpriteFlipping(){
+    if(flipSpriteX || flipSpriteY){
+        texture->mirror(flipSpriteX, flipSpriteY);
+    }
+}
+//---
