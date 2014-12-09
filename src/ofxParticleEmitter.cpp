@@ -87,7 +87,13 @@ ofxParticleEmitter::ofxParticleEmitter()
 	vertices = NULL;
 #endif
     
-    setLoopType(OF_LOOP_NORMAL);
+#ifdef EMIT_PPS
+    frameTime = 1.0/60.0;
+    pps = 100;
+    ppf = int(pps*frameTime);
+#endif
+    
+    setLoopType(OF_LOOP_NONE);
     bInited = false;
     
     //flipping
@@ -95,6 +101,20 @@ ofxParticleEmitter::ofxParticleEmitter()
     flipSpriteX = false;
     flipSpriteY = false;
     //---
+    
+    //push
+    resetPushers();
+    pctInteract = 0;
+    timeInteract =0;
+    pushMultiplier=1.0;
+    delay=0;
+    bInteractive=false;
+    //---
+    
+    delay = 0;
+    bStarted = false;
+    
+    setViewport(ofRectangle(0,0,ofGetWidth(),ofGetHeight()));
 }
 
 #ifdef RENDER_FAST
@@ -163,24 +183,31 @@ void ofxParticleEmitter::exit()
 	if ( texture != NULL )
 		delete texture;
 	texture = NULL;
-	
-	if ( particles != NULL )
-		delete particles;
-	particles = NULL;
-
+    
+    //initArray<Particle>(particles);
+    if(particles!=NULL){
+        delete particles;
+    }
+    particles=NULL;
 #ifdef RENDER_FAST
     if(vtx!=NULL){
         delete vtx;
-        vtx = NULL;
     }
+    vtx=NULL;
+    
     if(nlx!=NULL){
         delete nlx;
-        nlx = NULL;
     }
+    nlx=NULL;
+    
     if(clx!=NULL){
         delete clx;
-        clx = NULL;
     }
+    clx=NULL;
+    
+    //initArray<ofVec3f>(vtx);
+    //initArray<ofVec3f>(nlx);
+    //initArray<ofFloatColor>(clx);
 #else
 	if ( vertices != NULL )
 		delete vertices;
@@ -188,6 +215,7 @@ void ofxParticleEmitter::exit()
 #endif
 	glDeleteBuffers( 1, &verticesID );
     
+    resetPushers();
     bInited = false;
 }
 
@@ -239,6 +267,129 @@ void ofxParticleEmitter::savePositionToFile(string loadFile, string saveFile){
     settings = NULL;
 }
 
+void ofxParticleEmitter::saveToOldFile(string saveFile){
+    if(settings!=NULL){
+        delete settings;
+        settings = NULL;
+    }
+    
+    settings = new ofxXmlSettings();
+    
+    if(settings->load(saveFile)){
+        settings->pushTag( "particleEmitterConfig" );
+        
+        //emitter settings
+        settings->setAttribute("emitterType", "value", emitterType, 0);
+        
+        settings->setAttribute("sourcePosition", "x", sourcePosition.x, 0);
+        settings->setAttribute("sourcePosition", "y", sourcePosition.y, 0);
+        
+        settings->setAttribute("sourcePositionVariance", "x", sourcePositionVariance.x, 0);
+        settings->setAttribute("sourcePositionVariance", "y", sourcePositionVariance.y, 0);
+        
+        settings->setAttribute("duration", "value", duration, 0);
+        
+        settings->setAttribute( "maxParticles", "value", maxParticles, 0);
+        
+        settings->setAttribute("angle", "value", angle , 0);
+        settings->setAttribute("angleVariance", "value", angleVariance, 0);
+        
+        //emission rate
+        if(getEmissionRate()!=getNaturalEmissionRate()){
+            if(!settings->tagExists("emissionRate")){
+                settings->addTag("emissionRate");
+            }
+            settings->setAttribute("emissionRate", "value", getEmissionRate(), 0);
+        }
+        
+        //push
+        if(!settings->tagExists("pctInteract")){
+            settings->addTag("pctInteract");
+        }
+        settings->setAttribute("pctInteract", "value", pctInteract, 0);
+        
+        if(!settings->tagExists("timeInteract")){
+            settings->addTag("timeInteract");
+        }
+        settings->setAttribute("timeInteract", "value", timeInteract, 0);
+        
+        if(!settings->tagExists("pushMultiplier")){
+            settings->addTag("pushMultiplier");
+        }
+        settings->setAttribute("pushMultiplier", "value", pushMultiplier, 0);
+        
+        if(!settings->tagExists("delay")){
+            settings->addTag("delay");
+        }
+        settings->setAttribute("delay", "value", delay, 0);
+        
+        if(emitterType==0){
+            //gravity settings
+            settings->setAttribute("gravity", "x", gravity.x, 0 );
+            settings->setAttribute("gravity", "y", gravity.y, 0 );
+            
+            settings->setAttribute("speed", "value", speed, 0);
+            settings->setAttribute("speedVariance", "value", speedVariance, 0);
+            
+            settings->setAttribute( "radialAcceleration", "value", radialAcceleration,0);
+            settings->setAttribute("radialAccelVariance", "value", radialAccelVariance, 0);
+            
+            settings->setAttribute("tangentialAcceleration", "value", tangentialAcceleration, 0);
+            settings->setAttribute("tangentialAccelVariance", "value", tangentialAccelVariance, 0);
+        }else if(emitterType==1){
+            //radial settings
+            settings->setAttribute("maxRadius", "value", maxRadius, 0);
+            settings->setAttribute("maxRadiusVariance", "value", maxRadiusVariance, 0);
+            
+            settings->setAttribute("minRadius", "value", minRadius, 0);
+            
+            settings->setAttribute("rotatePerSecond", "value", rotatePerSecond, 0);
+            settings->setAttribute("rotatePerSecondVariance", "value", rotatePerSecondVariance, 0);
+        }
+        
+        //particle settings
+        settings->setAttribute("particleLifeSpan", "value", particleLifespan, 0);
+        settings->setAttribute("particleLifespanVariance", "value", particleLifespanVariance, 0);
+        
+        settings->setAttribute("startParticleSize", "value", startParticleSize, 0);
+        settings->setAttribute("startParticleSizeVariance", "value", startParticleSizeVariance, 0);
+        
+        settings->setAttribute("finishParticleSize", "value", finishParticleSize, 0);
+        settings->setAttribute("finishParticleSizeVariance", "value", finishParticleSizeVariance, 0);
+        
+        //color settings
+        settings->setAttribute("startColor", "red", startColor.red, 0);
+        settings->setAttribute("startColor", "green", startColor.green, 0);
+        settings->setAttribute("startColor", "blue", startColor.blue, 0);
+        settings->setAttribute("startColor", "alpha", startColor.alpha, 0);
+        
+        settings->setAttribute("startColorVariance", "red", startColorVariance.red, 0);
+        settings->setAttribute("startColorVariance", "green", startColorVariance.green, 0);
+        settings->setAttribute("startColorVariance", "blue", startColorVariance.blue, 0);
+        settings->setAttribute("startColorVariance", "alpha", startColorVariance.alpha, 0);
+        
+        settings->setAttribute("finishColor", "red", finishColor.red, 0);
+        settings->setAttribute("finishColor", "green", finishColor.green, 0);
+        settings->setAttribute("finishColor", "blue", finishColor.blue, 0);
+        settings->setAttribute("finishColor", "alpha", finishColor.alpha, 0);
+        
+        settings->setAttribute("finishColorVariance", "red", finishColorVariance.red, 0);
+        settings->setAttribute("finishColorVariance", "green", finishColorVariance.green, 0);
+        settings->setAttribute("finishColorVariance", "blue", finishColorVariance.blue, 0);
+        settings->setAttribute("finishColorVariance", "alpha", finishColorVariance.alpha, 0);
+        
+        settings->setAttribute("blendFuncSource", "value", blendFuncSource, 0);
+        settings->setAttribute("blendFuncDestination", "value", blendFuncDestination, 0);
+        
+        settings->popTag();
+        
+        settings->save(saveFile);
+    }
+    
+    delete settings;
+    settings = NULL;
+}
+
 bool ofxParticleEmitter::loadFromXml( const std::string& filename )
 {
     // Clean up things
@@ -259,7 +410,7 @@ bool ofxParticleEmitter::loadFromXml( const std::string& filename )
         start();
         ok = active;
         bInited = ok;
-        emissionRate =  maxParticles/particleLifespan;
+        //emissionRate =  maxParticles/particleLifespan;
 
 #ifdef RENDER_FAST
         shd.setupShaderFromSource(GL_VERTEX_SHADER, makeVertShdSource(bMultiSprite));
@@ -428,11 +579,55 @@ void ofxParticleEmitter::parseParticleConfig(string _pth)
 	
 	rotatePerSecond				= settings->getAttribute( "rotatePerSecond", "value", rotatePerSecond );
 	rotatePerSecondVariance		= settings->getAttribute( "rotatePerSecondVariance", "value", rotatePerSecondVariance );
+    
+#ifdef EMIT_PPS
+    int _eRate = getNaturalEmissionRate();
+    if(settings->tagExists("emissionRate")){
+        _eRate = settings->getAttribute("emissionRate", "value", _eRate);
+    }
+    setEmissionRate(_eRate);
+    
+    pctInteract = 0.0;
+    if(settings->tagExists("pctInteract")){
+        pctInteract = settings->getAttribute("pctInteract", "value", 0.0);
+    }
+    
+    timeInteract = 0.0;
+    if(settings->tagExists("timeInteract")){
+        timeInteract = settings->getAttribute("timeInteract", "value", 0.0);
+    }
+    
+    pushMultiplier = 1.0;
+    if(settings->tagExists("pushMultiplier")){
+        pushMultiplier = settings->getAttribute("pushMultiplier", "value", 0.0);
+    }
+    
+    delay = 0.0;
+    if(settings->tagExists("delay")){
+        delay = settings->getAttribute("delay", "value", 0.0);
+    }
+    
+#endif
+}
+
+template<typename T>
+void ofxParticleEmitter::initArray(T *a){
+    if(a!=NULL){
+        delete a;
+        a = NULL;
+    }
 }
 
 void ofxParticleEmitter::setupArrays()
 {
-	// Allocate the memory necessary for the particle emitter arrays
+	initArray<Particle>(particles);
+#ifdef RENDER_FAST
+    initArray<ofVec3f>(vtx);
+    initArray<ofVec3f>(nlx);
+    initArray<ofFloatColor>(clx);
+#endif
+    
+    // Allocate the memory necessary for the particle emitter arrays
 	particles = (Particle*)malloc( sizeof( Particle ) * maxParticles );
 #ifdef RENDER_FAST
     vtx = (ofVec3f*)malloc(sizeof(ofVec3f) * maxParticles);
@@ -467,7 +662,7 @@ bool ofxParticleEmitter::hasParticlesLeft(){
 bool ofxParticleEmitter::addParticle()
 {
 	// If we have already reached the maximum number of particles then do nothing
-	if(particleCount == maxParticles)
+	if(particleCount >= maxParticles)
 		return false;
 	
 	// Take the next particle out of the particle pool we have created and initialize it
@@ -497,14 +692,14 @@ void ofxParticleEmitter::initParticle( Particle* particle )
 	
 	// Create a new Vector2f using the newAngle
 	Vector2f vector = Vector2fMake(cosf(newAngle), sinf(newAngle));
-	
+    
 	// Calculate the vectorSpeed using the speed and speedVariance which has been passed in
 	float vectorSpeed = speed + speedVariance * RANDOM_MINUS_1_TO_1();
 	
 	// The particles direction vector is calculated by taking the vector calculated above and
 	// multiplying that by the speed
 	particle->direction = Vector2fMultiply(vector, vectorSpeed);
-	
+    
 	// Set the default diameter of the particle from the source position
 	particle->radius = maxRadius + maxRadiusVariance * RANDOM_MINUS_1_TO_1();
 	particle->radiusDelta = (maxRadius / particleLifespan) * (1.0 / MAXIMUM_UPDATE_RATE);
@@ -555,6 +750,16 @@ void ofxParticleEmitter::initParticle( Particle* particle )
         particle->sIdx = (int)ofRandom(0, nSprites-1);
     }
     //---
+    
+    //push
+    if(ofRandom(0.0,1.0)<pctInteract){
+        particle->z = 1.0;
+        particle->direction.x += emissionPush.x;
+        particle->direction.y += emissionPush.y;
+    }else{
+        particle->z = 0.0;
+    }
+    //---
 }
 
 void ofxParticleEmitter::stopParticleEmitter()
@@ -568,16 +773,50 @@ void ofxParticleEmitter::stopParticleEmitter()
 // Update
 // ------------------------------------------------------------------------
 
+#ifdef EMIT_PPS
+void ofxParticleEmitter::setEmissionRate(int _pps){
+    pps = _pps;
+    ppf = int(pps * frameTime);
+}
 
+int ofxParticleEmitter::getEmissionRate(){
+    return pps;
+}
+
+int ofxParticleEmitter::getNaturalEmissionRate(){
+    return int(maxParticles/particleLifespan);
+}
+
+void ofxParticleEmitter::updateFrameTime(){
+    frameTime = (ofGetElapsedTimeMillis()-lastUpdateMillis)/1000.0f;
+    ppf = int(pps * frameTime);
+}
+#endif
+
+void ofxParticleEmitter::setMaxParticles(int _maxParts){
+    maxParticles = _maxParts;
+    setupArrays();
+}
+
+#ifdef EMIT_PPS
+void ofxParticleEmitter::checkRunningState(){
+#else
 void ofxParticleEmitter::checkRunningState(float & aDelta){
+#endif
     if(active){
         if(duration==-1){
-            //emitParticles(10);
+#ifdef EMIT_PPS
+            emitParticles(ppf);
+#else
             emitParticlesFromDelta(aDelta);
+#endif
         }else{
             if(ofGetElapsedTimef()<endTime){
-                //emitParticles(10);
+#ifdef EMIT_PPS
+                emitParticles(ppf);
+#else
                 emitParticlesFromDelta(aDelta);
+#endif
             }else{
                 stopParticleEmitter();
             }
@@ -601,44 +840,109 @@ void ofxParticleEmitter::emitParticlesFromDelta(float &aDelta){
     if(emissionRate){
         float rate = 1/emissionRate;
         emitCounter += aDelta;
-        int cc =0;
+        
         while (particleCount < maxParticles && emitCounter > rate) {
             addParticle();
             emitCounter -= rate;
-            cc++;
         }
     }
 }
-
+    
+void ofxParticleEmitter::updateParticle(Particle *currentParticle){
+    // If maxRadius is greater than 0 then the particles are going to spin otherwise
+    // they are effected by speed and gravity
+    if (emitterType == kParticleTypeRadial) {
+        
+        // FIX 2
+        // Update the angle of the particle from the sourcePosition and the radius.  This is only
+        // done of the particles are rotating
+        currentParticle->angle += currentParticle->degreesPerSecond * frameTime;
+        currentParticle->radius -= currentParticle->radiusDelta;
+        
+        Vector2f tmp;
+        tmp.x = sourcePosition.x - cosf(currentParticle->angle) * currentParticle->radius;
+        tmp.y = sourcePosition.y - sinf(currentParticle->angle) * currentParticle->radius;
+        currentParticle->position = tmp;
+        
+        if (currentParticle->radius < minRadius)
+            currentParticle->timeToLive = 0;
+    } else {
+        Vector2f tmp, radial, tangential;
+        
+        radial = Vector2fZero;
+        Vector2f diff = Vector2fSub(currentParticle->startPos, Vector2fZero);
+        
+        currentParticle->position = Vector2fSub(currentParticle->position, diff);
+        
+        if (currentParticle->position.x || currentParticle->position.y)
+            radial = Vector2fNormalize(currentParticle->position);
+        
+        tangential.x = radial.x;
+        tangential.y = radial.y;
+        radial = Vector2fMultiply(radial, currentParticle->radialAcceleration);
+        
+        GLfloat newy = tangential.x;
+        tangential.x = -tangential.y;
+        tangential.y = newy;
+        tangential = Vector2fMultiply(tangential, currentParticle->tangentialAcceleration);
+        
+        tmp = Vector2fAdd( Vector2fAdd(radial, tangential), gravity);
+        tmp = Vector2fMultiply(tmp, frameTime);
+        currentParticle->direction = Vector2fAdd(currentParticle->direction, tmp);
+        tmp = Vector2fMultiply(currentParticle->direction, frameTime);
+        currentParticle->position = Vector2fAdd(currentParticle->position, tmp);
+        currentParticle->position = Vector2fAdd(currentParticle->position, diff);
+        
+        //push
+        if(currentParticle->z>=1 && currentParticle->timeToLive<(particleLifespan-timeInteract)){
+            ofVec2f psh = vField.getVectorForPoint(currentParticle->position.x, currentParticle->position.y);
+            //currentParticle->position += psh;
+            //tmp+=psh;
+            currentParticle->direction += psh;
+        //    currentParticle->direction.x += psh.x;
+        //    currentParticle->direction.y += psh.y;
+        }
+        //---
+        
+    }
+    
+    // Update the particles color
+    currentParticle->color.red += currentParticle->deltaColor.red;
+    currentParticle->color.green += currentParticle->deltaColor.green;
+    currentParticle->color.blue += currentParticle->deltaColor.blue;
+    currentParticle->color.alpha += currentParticle->deltaColor.alpha;
+#ifdef RENDER_FAST
+    vtx[particleIndex].set(currentParticle->position.x, currentParticle->position.y, 0);
+    clx[particleIndex].set(currentParticle->color.red, currentParticle->color.green, currentParticle->color.blue, currentParticle->color.alpha);
+    currentParticle->particleSize += currentParticle->particleSizeDelta;
+    nlx[particleIndex].x = MAX(0, currentParticle->particleSize);
+    nlx[particleIndex].y = currentParticle->sIdx;
+    nlx[particleIndex].z = nSprites;
+#else
+    // Place the position of the current particle into the vertices array
+    vertices[particleIndex].x = currentParticle->position.x;
+    vertices[particleIndex].y = currentParticle->position.y;
+    
+    // Place the size of the current particle in the size array
+    currentParticle->particleSize += currentParticle->particleSizeDelta;
+    vertices[particleIndex].size = MAX(0, currentParticle->particleSize);
+    
+    // Place the color of the current particle into the color array
+    vertices[particleIndex].color = currentParticle->color;
+#endif
+}
+    
 void ofxParticleEmitter::update()
 {
 	if(!bInited)return;
-    //if ( !active ) return;
-
-	// Calculate the emission rate
-	//emissionRate = maxParticles / particleLifespan;
-
-	GLfloat aDelta = (ofGetElapsedTimeMillis()-lastUpdateMillis)/1000.0f;
-    //GLfloat aDelta = ofGetElapsedTimef()-lastUpdateMillis;
-	
-    checkRunningState(aDelta);
+#ifdef EMIT_PPS
+    updateFrameTime();
+    checkRunningState();
+#else
+	GLfloat frameTime = (ofGetElapsedTimeMillis()-lastUpdateMillis)/1000.0f;
+    checkRunningState(frameTime);
+#endif
     
-	// If the emitter is active and the emission rate is greater than zero then emit
-	// particles
-    
-    /*if(active && emissionRate) {
-		float rate = 1.0f/emissionRate;
-		emitCounter += aDelta;
-		while(particleCount < maxParticles && emitCounter > rate) {
-			addParticle();
-			emitCounter -= rate;
-		}
-		
-		elapsedTime += aDelta;
-		if(duration != -1 && duration < elapsedTime)
-			stopParticleEmitter();
-	}*/
-	
 	// Reset the particle index before updating the particles in this emitter
 	particleIndex = 0;
 	
@@ -650,80 +954,13 @@ void ofxParticleEmitter::update()
         
         // FIX 1
         // Reduce the life span of the particle
-        currentParticle->timeToLive -= aDelta;
+        currentParticle->timeToLive -= frameTime;
 		
-		// If the current particle is alive then update it
-		if(currentParticle->timeToLive > 0) {
+		// If the current particle is alive && in viewport then update it
+		if(currentParticle->timeToLive > 0 && vField.inside(currentParticle->position.x, currentParticle->position.y)) {
 			
-			// If maxRadius is greater than 0 then the particles are going to spin otherwise
-			// they are effected by speed and gravity
-			if (emitterType == kParticleTypeRadial) {
-				
-                // FIX 2
-                // Update the angle of the particle from the sourcePosition and the radius.  This is only
-				// done of the particles are rotating
-				currentParticle->angle += currentParticle->degreesPerSecond * aDelta;
-				currentParticle->radius -= currentParticle->radiusDelta;
-                
-				Vector2f tmp;
-				tmp.x = sourcePosition.x - cosf(currentParticle->angle) * currentParticle->radius;
-				tmp.y = sourcePosition.y - sinf(currentParticle->angle) * currentParticle->radius;
-				currentParticle->position = tmp;
-				
-				if (currentParticle->radius < minRadius)
-					currentParticle->timeToLive = 0;
-			} else {
-				Vector2f tmp, radial, tangential;
-                
-                radial = Vector2fZero;
-                Vector2f diff = Vector2fSub(currentParticle->startPos, Vector2fZero);
-                
-                currentParticle->position = Vector2fSub(currentParticle->position, diff);
-                
-                if (currentParticle->position.x || currentParticle->position.y)
-                    radial = Vector2fNormalize(currentParticle->position);
-                
-                tangential.x = radial.x;
-                tangential.y = radial.y;
-                radial = Vector2fMultiply(radial, currentParticle->radialAcceleration);
-                
-                GLfloat newy = tangential.x;
-                tangential.x = -tangential.y;
-                tangential.y = newy;
-                tangential = Vector2fMultiply(tangential, currentParticle->tangentialAcceleration);
-                
-				tmp = Vector2fAdd( Vector2fAdd(radial, tangential), gravity);
-                tmp = Vector2fMultiply(tmp, aDelta);
-				currentParticle->direction = Vector2fAdd(currentParticle->direction, tmp);
-				tmp = Vector2fMultiply(currentParticle->direction, aDelta);
-				currentParticle->position = Vector2fAdd(currentParticle->position, tmp);
-                currentParticle->position = Vector2fAdd(currentParticle->position, diff);
-			}
-			
-			// Update the particles color
-			currentParticle->color.red += currentParticle->deltaColor.red;
-			currentParticle->color.green += currentParticle->deltaColor.green;
-			currentParticle->color.blue += currentParticle->deltaColor.blue;
-			currentParticle->color.alpha += currentParticle->deltaColor.alpha;
-#ifdef RENDER_FAST
-            vtx[particleIndex].set(currentParticle->position.x, currentParticle->position.y, 0);
-            clx[particleIndex].set(currentParticle->color.red, currentParticle->color.green, currentParticle->color.blue, currentParticle->color.alpha);
-            currentParticle->particleSize += currentParticle->particleSizeDelta;
-            nlx[particleIndex].x = MAX(0, currentParticle->particleSize);
-            nlx[particleIndex].y = currentParticle->sIdx;
-            nlx[particleIndex].z = nSprites;
-#else
-			// Place the position of the current particle into the vertices array
-			vertices[particleIndex].x = currentParticle->position.x;
-			vertices[particleIndex].y = currentParticle->position.y;
-			
-			// Place the size of the current particle in the size array
-			currentParticle->particleSize += currentParticle->particleSizeDelta;
-			vertices[particleIndex].size = MAX(0, currentParticle->particleSize);
-			
-			// Place the color of the current particle into the color array
-			vertices[particleIndex].color = currentParticle->color;
-#endif
+			updateParticle(currentParticle);
+            
 			// Update the particle counter
 			particleIndex++;
 		} else {
@@ -739,7 +976,7 @@ void ofxParticleEmitter::update()
 	}
 
 	lastUpdateMillis = ofGetElapsedTimeMillis();
-    //lastUpdateMillis = ofGetElapsedTimef();
+    resetPushers();
 }
 
 // ------------------------------------------------------------------------
@@ -981,6 +1218,7 @@ void ofxParticleEmitter::start(){
         startTime = ofGetElapsedTimef();
         endTime = startTime + duration;
         active = true;
+        bStarted = true;
    }
 }
 
@@ -991,6 +1229,10 @@ void ofxParticleEmitter::setLoopType(ofLoopType _loop){
     }else{
         loopType = _loop;
     }
+}
+
+void ofxParticleEmitter::setViewport(ofRectangle r, float blockX, float blockY){
+    vField.setup(r, ofVec2f(blockX,blockY));
 }
 
 //flipping (to be called first)
@@ -1009,3 +1251,18 @@ void ofxParticleEmitter::applySpriteFlipping(){
     }
 }
 //---
+
+//push
+void ofxParticleEmitter::resetPushers(){
+    emissionPush.set(0,0);
+}
+    
+void ofxParticleEmitter::applyEmissionPush(ofVec2f psh){
+    emissionPush=psh;
+}
+    
+//---
+
+ofImage * ofxParticleEmitter::getSprite(){
+    return texture;
+}

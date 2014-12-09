@@ -27,8 +27,17 @@
 #include "ofMain.h"
 #include "ofxXmlSettings.h"
 #include "base64.h"
+#include "ofxBasicVectorfield.h"
 
+// toggles the use of vbo rendering
+#ifndef RENDER_FAST
 #define RENDER_FAST
+#endif
+
+// emits N particles per second, instead of bursting until maximum number is reached
+#ifndef EMIT_PPS
+#define EMIT_PPS
+#endif
 
 // ------------------------------------------------------------------------
 // Structures
@@ -43,10 +52,42 @@ typedef struct {
 } Color4f;
 
 // Structure that defines a vector using x and y
-typedef struct {
+struct Vector2f{
+    Vector2f operator+(const Vector2f v){
+        this->x += v.x;
+        this->y += v.y;
+        return *this;
+    }
+    Vector2f operator+(const ofVec2f v){
+        this->x += v.x;
+        this->y += v.y;
+        return *this;
+    }
+    Vector2f& operator+=(const Vector2f v){
+        this->x += v.x;
+        this->y += v.y;
+        return *this;
+    }
+    Vector2f& operator+=(const ofVec2f v){
+        this->x += v.x;
+        this->y += v.y;
+        return *this;
+    }
+
+    Vector2f operator*(float f){
+        this->x *= f;
+        this->y *= f;
+        return *this;
+    }
+    Vector2f& operator*=(float f){
+        this->x *= f;
+        this->y *= f;
+        return *this;
+    }
+
 	GLfloat x;
 	GLfloat y;
-} Vector2f;
+};
 
 // Particle type
 enum kParticleTypes 
@@ -83,6 +124,7 @@ typedef struct
 	GLfloat		timeToLive;
     
     GLfloat     sIdx;
+    GLfloat     z; //used for interaction
 } Particle;
 
 // ------------------------------------------------------------------------
@@ -175,6 +217,10 @@ public:
 	
 	bool	loadFromXml( const std::string& filename );
 	void    savePositionToFile(string loadFile, string saveFile);
+    void    saveToOldFile(string saveFile);
+    
+    template<typename T>
+    void initArray(T * a);
     
     //emitter controls
     void start();
@@ -182,14 +228,30 @@ public:
     bool isRunning();
     bool isReady();
     void setLoopType(ofLoopType _loop);
+    bool isLooping(){return (loopType==OF_LOOP_NORMAL);}
     void setPosition(ofVec2f np);
     ofVec2f getPosition();
     bool hasParticlesLeft();
+    void setViewport(ofRectangle r, float blockX=10, float blockY=10);
+#ifdef EMIT_PPS
+    void setEmissionRate(int _pps);
+    int getEmissionRate();
+    int getNaturalEmissionRate();
+#endif
+    void setMaxParticles(int _maxParts);
+    
+    //pushing
+    void applyEmissionPush(ofVec2f psh);
+    void resetPushers();
+    void clearVectorField();
+    void resetVectorField();
+    //---
     
     void	update();
 	void	draw( int x = 0, int y = 0 );
 	void	exit();
     string  getTextureName();
+    ofImage * getSprite();
     void    changeTexture(string filename);
     
     void flipY(bool b);
@@ -222,8 +284,15 @@ public:
 	GLfloat			rotatePerSecond;				// Number of degrees to rotate a particle around the source position per second
 	GLfloat			rotatePerSecondVariance;		// Variance in degrees for rotatePerSecond
 	
+    ofxBasicVectorfield vField;
+    float pctInteract;
+    float timeInteract;
+    float pushMultiplier;
+    float delay;
+    bool bInteractive;
+    bool bStarted;
 protected:
-	
+    
 	void	parseParticleConfig(string _pth="");
 	void	setupArrays();
 	
@@ -232,8 +301,13 @@ protected:
 	void	initParticle( Particle* particle );
 	
 	void	drawTextures();
-    
+
+#ifdef EMIT_PPS
+    void checkRunningState();
+#else
     void checkRunningState(float & aDelta);
+#endif
+    void updateParticle(Particle * currentParticle);
     void emitParticles(int n);
     void emitParticlesFromDelta(float & aDelta);
     string getImagePathFromName(string imgName, string pexPth="");
@@ -276,6 +350,13 @@ protected:
 	PointSprite*	vertices;		// Array of vertices and color information for each particle to be rendered
 #endif
     
+#ifdef EMIT_PPS
+    void updateFrameTime();
+    float frameTime;
+    int pps;
+    int ppf;
+#endif
+    
     //multisprites
     bool bMultiSprite;
     int nSprites;
@@ -287,6 +368,14 @@ protected:
     bool flipSpriteX;
     bool flipSpriteY;
     //---
+    
+    //push
+    //ofRectangle rVp;
+    ofVec2f emissionPush;
+    //ofVec2f vpBlock;
+    //vector< vector<ofVec2f> > vField;
+    //float pctInteract;
+    //----
     
     ofLoopType loopType;
     bool bInited;
