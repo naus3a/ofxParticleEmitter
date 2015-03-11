@@ -111,6 +111,10 @@ ofxParticleEmitter::ofxParticleEmitter()
     bInteractive=false;
     //---
     
+    //mask
+    pMask = NULL;
+    //---
+    
     delay = 0;
     bStarted = false;
     
@@ -183,6 +187,8 @@ void ofxParticleEmitter::exit()
 	if ( texture != NULL )
 		delete texture;
 	texture = NULL;
+    
+    pMask = NULL;
     
     //initArray<Particle>(particles);
     if(particles!=NULL){
@@ -655,6 +661,11 @@ void ofxParticleEmitter::setupArrays()
 // Particle Management
 // ------------------------------------------------------------------------
 
+void ofxParticleEmitter::clearParticles(){
+    particleIndex = 0;
+    particleCount = 0;
+}
+
 bool ofxParticleEmitter::hasParticlesLeft(){
     return (particleCount>0);
 }
@@ -847,70 +858,59 @@ void ofxParticleEmitter::emitParticlesFromDelta(float &aDelta){
         }
     }
 }
+
+void ofxParticleEmitter::updatePartRadial(Particle *currentParticle){
+    // FIX 2
+    // Update the angle of the particle from the sourcePosition and the radius.  This is only
+    // done of the particles are rotating
+    currentParticle->angle += currentParticle->degreesPerSecond * frameTime;
+    currentParticle->radius -= currentParticle->radiusDelta;
     
-void ofxParticleEmitter::updateParticle(Particle *currentParticle){
-    // If maxRadius is greater than 0 then the particles are going to spin otherwise
-    // they are effected by speed and gravity
-    if (emitterType == kParticleTypeRadial) {
-        
-        // FIX 2
-        // Update the angle of the particle from the sourcePosition and the radius.  This is only
-        // done of the particles are rotating
-        currentParticle->angle += currentParticle->degreesPerSecond * frameTime;
-        currentParticle->radius -= currentParticle->radiusDelta;
-        
-        Vector2f tmp;
-        tmp.x = sourcePosition.x - cosf(currentParticle->angle) * currentParticle->radius;
-        tmp.y = sourcePosition.y - sinf(currentParticle->angle) * currentParticle->radius;
-        currentParticle->position = tmp;
-        
-        if (currentParticle->radius < minRadius)
-            currentParticle->timeToLive = 0;
-    } else {
-        Vector2f tmp, radial, tangential;
-        
-        radial = Vector2fZero;
-        Vector2f diff = Vector2fSub(currentParticle->startPos, Vector2fZero);
-        
-        currentParticle->position = Vector2fSub(currentParticle->position, diff);
-        
-        if (currentParticle->position.x || currentParticle->position.y)
-            radial = Vector2fNormalize(currentParticle->position);
-        
-        tangential.x = radial.x;
-        tangential.y = radial.y;
-        radial = Vector2fMultiply(radial, currentParticle->radialAcceleration);
-        
-        GLfloat newy = tangential.x;
-        tangential.x = -tangential.y;
-        tangential.y = newy;
-        tangential = Vector2fMultiply(tangential, currentParticle->tangentialAcceleration);
-        
-        tmp = Vector2fAdd( Vector2fAdd(radial, tangential), gravity);
-        tmp = Vector2fMultiply(tmp, frameTime);
-        currentParticle->direction = Vector2fAdd(currentParticle->direction, tmp);
-        tmp = Vector2fMultiply(currentParticle->direction, frameTime);
-        currentParticle->position = Vector2fAdd(currentParticle->position, tmp);
-        currentParticle->position = Vector2fAdd(currentParticle->position, diff);
-        
-        //push
-        if(currentParticle->z>=1 && currentParticle->timeToLive<(particleLifespan-timeInteract)){
-            ofVec2f psh = vField.getVectorForPoint(currentParticle->position.x, currentParticle->position.y);
-            //currentParticle->position += psh;
-            //tmp+=psh;
-            currentParticle->direction += psh;
-        //    currentParticle->direction.x += psh.x;
-        //    currentParticle->direction.y += psh.y;
-        }
-        //---
-        
+    Vector2f tmp;
+    tmp.x = sourcePosition.x - cosf(currentParticle->angle) * currentParticle->radius;
+    tmp.y = sourcePosition.y - sinf(currentParticle->angle) * currentParticle->radius;
+    currentParticle->position = tmp;
+    
+    if (currentParticle->radius < minRadius)
+        currentParticle->timeToLive = 0;
+}
+    
+void ofxParticleEmitter::updatePartLinear(Particle * currentParticle){
+    Vector2f tmp, radial, tangential;
+    
+    radial = Vector2fZero;
+    Vector2f diff = Vector2fSub(currentParticle->startPos, Vector2fZero);
+    
+    currentParticle->position = Vector2fSub(currentParticle->position, diff);
+    
+    if (currentParticle->position.x || currentParticle->position.y)
+        radial = Vector2fNormalize(currentParticle->position);
+    
+    tangential.x = radial.x;
+    tangential.y = radial.y;
+    radial = Vector2fMultiply(radial, currentParticle->radialAcceleration);
+    
+    GLfloat newy = tangential.x;
+    tangential.x = -tangential.y;
+    tangential.y = newy;
+    tangential = Vector2fMultiply(tangential, currentParticle->tangentialAcceleration);
+    
+    tmp = Vector2fAdd( Vector2fAdd(radial, tangential), gravity);
+    tmp = Vector2fMultiply(tmp, frameTime);
+    currentParticle->direction = Vector2fAdd(currentParticle->direction, tmp);
+    tmp = Vector2fMultiply(currentParticle->direction, frameTime);
+    currentParticle->position = Vector2fAdd(currentParticle->position, tmp);
+    currentParticle->position = Vector2fAdd(currentParticle->position, diff);
+}
+    
+void ofxParticleEmitter::applyField2Part(Particle *currentParticle){
+    if(currentParticle->z>=1 && currentParticle->timeToLive<(particleLifespan-timeInteract)){
+        ofVec2f psh = vField.getVectorForPoint(currentParticle->position.x, currentParticle->position.y);
+        currentParticle->direction += psh;
     }
+}
     
-    // Update the particles color
-    currentParticle->color.red += currentParticle->deltaColor.red;
-    currentParticle->color.green += currentParticle->deltaColor.green;
-    currentParticle->color.blue += currentParticle->deltaColor.blue;
-    currentParticle->color.alpha += currentParticle->deltaColor.alpha;
+void ofxParticleEmitter::updatePartMesh(Particle *currentParticle){
 #ifdef RENDER_FAST
     vtx[particleIndex].set(currentParticle->position.x, currentParticle->position.y, 0);
     clx[particleIndex].set(currentParticle->color.red, currentParticle->color.green, currentParticle->color.blue, currentParticle->color.alpha);
@@ -930,6 +930,29 @@ void ofxParticleEmitter::updateParticle(Particle *currentParticle){
     // Place the color of the current particle into the color array
     vertices[particleIndex].color = currentParticle->color;
 #endif
+}
+    
+void ofxParticleEmitter::updateParticle(Particle *currentParticle){
+    // If maxRadius is greater than 0 then the particles are going to spin otherwise
+    // they are effected by speed and gravity
+    if (emitterType == kParticleTypeRadial) {
+        updatePartRadial(currentParticle);
+    } else {
+        updatePartLinear(currentParticle);
+        
+        //push
+        applyField2Part(currentParticle);
+        //---
+        
+    }
+    
+    // Update the particles color
+    currentParticle->color.red += currentParticle->deltaColor.red;
+    currentParticle->color.green += currentParticle->deltaColor.green;
+    currentParticle->color.blue += currentParticle->deltaColor.blue;
+    currentParticle->color.alpha += currentParticle->deltaColor.alpha;
+    
+    updatePartMesh(currentParticle);
 }
     
 void ofxParticleEmitter::update()
@@ -1266,3 +1289,137 @@ void ofxParticleEmitter::applyEmissionPush(ofVec2f psh){
 ofImage * ofxParticleEmitter::getSprite(){
     return texture;
 }
+
+//mask---
+void ofxParticleEmitter::linkMask(ofxParticleMask *_pMask, bool bActivate){
+    pMask = _pMask;
+    pMask->numLinked = 0;
+    if(bActivate){
+        activateMask();
+    }
+}
+    
+void ofxParticleEmitter::activateMask(){
+    maxParticles = pMask->pts.size();
+    setupArrays();
+}
+    
+void ofxParticleEmitter::updateMask(){
+    if(!bInited)return;
+    
+    updateFrameTime();
+    
+    if(active){
+        if(particleCount<pMask->pts.size()){
+            emitParticles(ppf);
+            pMask->numLinked += ppf;
+            if(pMask->numLinked>pMask->pts.size())pMask->numLinked = pMask->pts.size();
+        }
+    }
+    
+    particleIndex = 0;
+    
+    while(particleIndex < particleCount) {
+        Particle *currentParticle = &particles[particleIndex];
+        currentParticle->timeToLive -= frameTime;
+        bool bLive;
+        if(pMask->bFade){
+            bLive = currentParticle->timeToLive>0;
+        }else{
+            bLive = currentParticle->timeToLive>0;
+            if(!bLive){
+                bLive = true;
+                currentParticle->timeToLive = MAX(0, particleLifespan + particleLifespanVariance * RANDOM_MINUS_1_TO_1());
+                float sA = startColor.alpha + startColorVariance.alpha * RANDOM_MINUS_1_TO_1();
+                float eA = finishColor.alpha + finishColorVariance.alpha * RANDOM_MINUS_1_TO_1();
+                currentParticle->color.alpha = sA;
+                currentParticle->deltaColor.alpha = ((eA-sA)/currentParticle->timeToLive)*(1.0/MAXIMUM_UPDATE_RATE);
+                float sS = startParticleSize + startParticleSizeVariance * RANDOM_MINUS_1_TO_1();
+                float sE = finishParticleSize + finishParticleSizeVariance * RANDOM_MINUS_1_TO_1();
+                currentParticle->particleSizeDelta = ((sE - sS) / currentParticle->timeToLive) * (1.0 / MAXIMUM_UPDATE_RATE);
+                currentParticle->particleSize = MAX(0, sS);
+            }
+        }
+        
+        if(bLive && vField.inside(currentParticle->position.x, currentParticle->position.y)) {
+            
+            //updateParticle(currentParticle);
+            updatePartLinear(currentParticle);
+            pMask->attractPex(currentParticle, particleIndex);
+            
+            currentParticle->color.red += currentParticle->deltaColor.red;
+            currentParticle->color.green += currentParticle->deltaColor.green;
+            currentParticle->color.blue += currentParticle->deltaColor.blue;
+            currentParticle->color.alpha += currentParticle->deltaColor.alpha;
+            
+            updatePartMesh(currentParticle);
+            
+            particleIndex++;
+        }else{
+            if(particleIndex != particleCount - 1)
+				particles[particleIndex] = particles[particleCount - 1];
+			particleCount--;
+        }
+    }
+    
+    lastUpdateMillis = ofGetElapsedTimeMillis();
+    resetPushers();
+    
+    /*if(!bInited)return;
+    updateFrameTime();
+    
+    if(active){
+        if(particleCount<pMask->pts.size()){
+            emitParticles(ppf);
+            pMask->numLinked += ppf;
+            if(pMask->numLinked>pMask->pts.size())pMask->numLinked = pMask->pts.size();
+        }
+    }
+    
+    particleIndex = 0;
+    
+    while (particleIndex < particleCount) {
+        Particle *currentParticle = &particles[particleIndex];
+        
+        updatePartLinear(currentParticle);
+        
+        pMask->attractPex(currentParticle, particleIndex);
+        
+        currentParticle->color.red += currentParticle->deltaColor.red;
+        currentParticle->color.green += currentParticle->deltaColor.green;
+        currentParticle->color.blue += currentParticle->deltaColor.blue;
+        currentParticle->color.alpha += currentParticle->deltaColor.alpha;
+        
+        if(!pMask->bFade){
+            if(currentParticle->color.alpha<=0){
+                float sA = startColor.alpha + startColorVariance.alpha * RANDOM_MINUS_1_TO_1();
+                float eA = finishColor.alpha + finishColorVariance.alpha * RANDOM_MINUS_1_TO_1();
+                currentParticle->color.alpha = sA;
+                currentParticle->deltaColor.alpha = ((eA-sA)/currentParticle->timeToLive)*(1.0/MAXIMUM_UPDATE_RATE);
+                currentParticle->particleSizeDelta *= -1;
+            }
+            updatePartMesh(currentParticle);
+            particleIndex++;
+        }else{
+            if(currentParticle->color.alpha<=0){
+                if(particleIndex != particleCount - 1)
+                    particles[particleIndex] = particles[particleCount - 1];
+                particleCount--;
+            }else{
+                updatePartMesh(currentParticle);
+                particleIndex++;
+            }
+        }
+        
+        //updatePartMesh(currentParticle);
+        
+        
+        //particleIndex++;
+    }
+    
+    lastUpdateMillis = ofGetElapsedTimeMillis();
+    resetPushers();*/
+}
+    
+
+//---mask
